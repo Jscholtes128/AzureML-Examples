@@ -1,0 +1,254 @@
+{
+  "cells": [
+    {
+      "cell_type": "code",
+      "source": [
+        "from azureml.train.hyperdrive import BayesianParameterSampling, choice, uniform\r\n",
+        "from azureml.train.hyperdrive import BanditPolicy\r\n",
+        "from azureml.core import Workspace\r\n",
+        "from azureml.core import Experiment, Environment\r\n",
+        "from azureml.train.hyperdrive import HyperDriveConfig, PrimaryMetricGoal\r\n",
+        "from azureml.core.runconfig import RunConfiguration\r\n",
+        "from azureml.core.conda_dependencies import CondaDependencies\r\n",
+        "from azureml.core.compute import ComputeTarget, AmlCompute\r\n",
+        "from azureml.core.compute_target import ComputeTargetException\r\n",
+        "from azureml.core import ScriptRunConfig\r\n",
+        "\r\n"
+      ],
+      "outputs": [],
+      "execution_count": 1,
+      "metadata": {
+        "gather": {
+          "logged": 1635360029446
+        }
+      }
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "ws = Workspace.from_config()\r\n",
+        "\r\n",
+        "#ws = Workspace(workspace_name = workspace_name,\r\n",
+        "#               subscription_id = subscription_id,\r\n",
+        "#               resource_group = resource_group)"
+      ],
+      "outputs": [],
+      "execution_count": 2,
+      "metadata": {
+        "jupyter": {
+          "source_hidden": false,
+          "outputs_hidden": false
+        },
+        "nteract": {
+          "transient": {
+            "deleting": false
+          }
+        },
+        "gather": {
+          "logged": 1635360030103
+        }
+      }
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "param_space = {\r\n",
+        "                 '--n_estimators': choice(1,5,10, 50, 100,500),\r\n",
+        "                 '--max_depth': choice(range(1,3))\r\n",
+        "              }\r\n",
+        "\r\n",
+        "#Bayesian tries to select parameter combinations that will result in improved performance from the previous selection\r\n",
+        "param_sampling = BayesianParameterSampling(param_space)\r\n",
+        "\r\n",
+        "\r\n",
+        "#bandit policy to stop a run if the target performance metric underperforms the best run so far by a specified margin\r\n",
+        "\r\n",
+        "early_termination_policy = BanditPolicy(slack_amount = 0.2,\r\n",
+        "                                        evaluation_interval=1,\r\n",
+        "                                        delay_evaluation=5)"
+      ],
+      "outputs": [],
+      "execution_count": 3,
+      "metadata": {
+        "jupyter": {
+          "source_hidden": false,
+          "outputs_hidden": false
+        },
+        "nteract": {
+          "transient": {
+            "deleting": false
+          }
+        },
+        "gather": {
+          "logged": 1635360030366
+        }
+      }
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "cpu_cluster_name = \"cpuclst\"\r\n",
+        "\r\n",
+        "# Verify that cluster does not exist already\r\n",
+        "try:\r\n",
+        "    cpu_cluster = ComputeTarget(workspace=ws, name=cpu_cluster_name)\r\n",
+        "    print('Found existing cluster, use it.')\r\n",
+        "except ComputeTargetException:\r\n",
+        "    compute_config = AmlCompute.provisioning_configuration(vm_size='STANDARD_DS3_V2', \r\n",
+        "                                                           idle_seconds_before_scaledown=3600,\r\n",
+        "                                                           min_nodes=0, \r\n",
+        "                                                           max_nodes=4)\r\n",
+        "    cpu_cluster = ComputeTarget.create(ws, cpu_cluster_name, compute_config)\r\n",
+        "\r\n",
+        "cpu_cluster.wait_for_completion(show_output=True)\r\n",
+        "\r\n",
+        "aml_run_config = RunConfiguration()\r\n",
+        "aml_run_config.target = cpu_cluster\r\n",
+        "\r\n",
+        "curated_environment = Environment.get(workspace=ws,name=\"sklearn_20_2\")\r\n",
+        "aml_run_config.environment = curated_environment\r\n",
+        "\r\n",
+        "script_config = ScriptRunConfig(source_directory='./', script='train.py',run_config=aml_run_config)\r\n",
+        "\r\n",
+        "\r\n"
+      ],
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": "Found existing cluster, use it.\nSucceeded\nAmlCompute wait for completion finished\n\nMinimum number of nodes requested have been provisioned\n"
+        }
+      ],
+      "execution_count": 4,
+      "metadata": {
+        "jupyter": {
+          "source_hidden": false,
+          "outputs_hidden": false
+        },
+        "nteract": {
+          "transient": {
+            "deleting": false
+          }
+        },
+        "gather": {
+          "logged": 1635360031265
+        }
+      }
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "\r\n",
+        "hyperdrive = HyperDriveConfig(run_config=script_config,\r\n",
+        "                              hyperparameter_sampling=param_sampling,\r\n",
+        "                              policy=None,\r\n",
+        "                              primary_metric_name='Accuracy',\r\n",
+        "                              primary_metric_goal=PrimaryMetricGoal.MAXIMIZE,\r\n",
+        "                              max_total_runs=6,\r\n",
+        "                              max_concurrent_runs=4)\r\n",
+        "\r\n",
+        "experiment = Experiment(workspace = ws, name = 'hyperdrive_training')\r\n",
+        "hyperdrive_run = experiment.submit(config=hyperdrive)\r\n",
+        "hyperdrive_run.wait_for_completion()"
+      ],
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stderr",
+          "text": "For best results with Bayesian Sampling we recommend using a maximum number of runs greater than or equal to 20 times the number of hyperparameters being tuned. Recommendend value:40.\n"
+        },
+        {
+          "output_type": "execute_result",
+          "execution_count": 5,
+          "data": {
+            "text/plain": "{'runId': 'HD_bdc056d8-8f27-4835-9d07-8bf278a58e9a',\n 'target': 'cpuclst',\n 'status': 'Completed',\n 'startTimeUtc': '2021-10-27T18:40:33.344694Z',\n 'endTimeUtc': '2021-10-27T18:44:38.816255Z',\n 'properties': {'primary_metric_config': '{\"name\": \"Accuracy\", \"goal\": \"maximize\"}',\n  'resume_from': 'null',\n  'runTemplate': 'HyperDrive',\n  'azureml.runsource': 'hyperdrive',\n  'platform': 'AML',\n  'ContentSnapshotId': '2b953dba-b7fb-4ad2-b6d4-dfa7d65f911e',\n  'user_agent': 'python/3.6.9 (Linux-5.4.0-1055-azure-x86_64-with-debian-buster-sid) msrest/0.6.21 Hyperdrive.Service/1.0.0 Hyperdrive.SDK/core.1.33.0',\n  'score': '0.8136666666666666',\n  'best_child_run_id': 'HD_bdc056d8-8f27-4835-9d07-8bf278a58e9a_3',\n  'best_metric_status': 'Succeeded'},\n 'inputDatasets': [],\n 'outputDatasets': [],\n 'logFiles': {'azureml-logs/hyperdrive.txt': 'https://aiwml1892670485.blob.core.windows.net/azureml/ExperimentRun/dcid.HD_bdc056d8-8f27-4835-9d07-8bf278a58e9a/azureml-logs/hyperdrive.txt?sv=2019-07-07&sr=b&sig=wfuIhPymLaTmBQsmtWRDkv1UcMniRhqdBgakzvZdVIU%3D&skoid=a1265889-07ed-4bdf-9cc8-db6c07cff746&sktid=72f988bf-86f1-41af-91ab-2d7cd011db47&skt=2021-10-27T15%3A52%3A33Z&ske=2021-10-29T00%3A02%3A33Z&sks=b&skv=2019-07-07&st=2021-10-27T18%3A34%3A52Z&se=2021-10-28T02%3A44%3A52Z&sp=r'},\n 'submittedBy': 'Jonathan Scholtes'}"
+          },
+          "metadata": {}
+        }
+      ],
+      "execution_count": 5,
+      "metadata": {
+        "jupyter": {
+          "source_hidden": false,
+          "outputs_hidden": false
+        },
+        "nteract": {
+          "transient": {
+            "deleting": false
+          }
+        },
+        "gather": {
+          "logged": 1635360293134
+        }
+      }
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "best_run = hyperdrive_run.get_best_run_by_primary_metric()\r\n",
+        "best_run_metrics = best_run.get_metrics()\r\n",
+        "parameter_values = best_run.get_details()['runDefinition']['arguments']\r\n",
+        "\r\n",
+        "print('Best Run Id: ', best_run.id)\r\n",
+        "print('\\n Accuracy:', best_run_metrics['Accuracy'])\r\n",
+        "print(parameter_values)\r\n"
+      ],
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": "Best Run Id:  HD_bdc056d8-8f27-4835-9d07-8bf278a58e9a_3\n\n Accuracy: 0.8136666666666666\n['--n_estimators', '10', '--max_depth', '2']\n"
+        }
+      ],
+      "execution_count": 6,
+      "metadata": {
+        "jupyter": {
+          "source_hidden": false,
+          "outputs_hidden": false
+        },
+        "nteract": {
+          "transient": {
+            "deleting": false
+          }
+        },
+        "gather": {
+          "logged": 1635360296051
+        }
+      }
+    }
+  ],
+  "metadata": {
+    "kernelspec": {
+      "name": "python3-azureml",
+      "language": "python",
+      "display_name": "Python 3.6 - AzureML"
+    },
+    "language_info": {
+      "name": "python",
+      "version": "3.6.9",
+      "mimetype": "text/x-python",
+      "codemirror_mode": {
+        "name": "ipython",
+        "version": 3
+      },
+      "pygments_lexer": "ipython3",
+      "nbconvert_exporter": "python",
+      "file_extension": ".py"
+    },
+    "kernel_info": {
+      "name": "python3-azureml"
+    },
+    "microsoft": {
+      "host": {
+        "AzureML": {
+          "notebookHasBeenCompleted": true
+        }
+      }
+    },
+    "nteract": {
+      "version": "nteract-front-end@1.0.0"
+    }
+  },
+  "nbformat": 4,
+  "nbformat_minor": 0
+}
